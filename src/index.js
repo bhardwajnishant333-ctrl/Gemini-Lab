@@ -1,0 +1,19 @@
+const page = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gemini Lab</title><style>body{background:#10141b;color:#eee;font:16px system-ui;max-width:720px;margin:8vh auto;padding:20px}textarea,input{box-sizing:border-box;width:100%;background:#1e2632;color:white;border:1px solid #526075;border-radius:9px;padding:12px;margin:8px 0}textarea{height:150px}button{padding:12px 20px;border:0;border-radius:8px;background:#a5e0d4}pre{white-space:pre-wrap}</style><h1>Gemini Lab</h1><p>Independent AI experiment</p><input id="token" type="password" autocomplete="off" placeholder="App access token"><textarea id="prompt" placeholder="Ask Gemini"></textarea><button id="go">Generate</button><pre id="result"></pre><script>document.getElementById('go').onclick=async()=>{const o=document.getElementById('result');o.textContent='Working…';try{const r=await fetch('/api/generate',{method:'POST',headers:{'content-type':'application/json','authorization':'Bearer '+document.getElementById('token').value},body:JSON.stringify({prompt:document.getElementById('prompt').value})});const j=await r.json();o.textContent=j.text||j.error||'No response'}catch{o.textContent='Request failed'}}</script></html>`;
+function equalToken(a,b){const x=new TextEncoder().encode(a),y=new TextEncoder().encode(b);let diff=x.length^y.length;for(let i=0;i<Math.max(x.length,y.length);i++)diff|=(x[i]||0)^(y[i]||0);return diff===0}
+export default {async fetch(request,env){
+const path=new URL(request.url).pathname;
+const headers={'cache-control':'no-store','x-content-type-options':'nosniff'};
+if(path==='/'&&request.method==='GET')return new Response(page,{headers:{...headers,'content-type':'text/html; charset=utf-8','content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'"}});
+if(path!=='/api/generate')return new Response('Not found',{status:404});
+if(request.method!=='POST')return Response.json({error:'Method not allowed'},{status:405,headers});
+if(!env.GEMINI_API_KEY||!env.APP_ACCESS_TOKEN)return Response.json({error:'Server secrets not configured'},{status:503,headers});
+const auth=request.headers.get('authorization')||'';
+if(!auth.startsWith('Bearer ')||!equalToken(auth.slice(7),env.APP_ACCESS_TOKEN))return Response.json({error:'Unauthorized'},{status:401,headers});
+if(Number(request.headers.get('content-length')||0)>12000)return Response.json({error:'Request too large'},{status:413,headers});
+let body;try{body=await request.json()}catch{return Response.json({error:'Invalid JSON'},{status:400,headers})}
+if(typeof body.prompt!=='string'||!body.prompt.trim()||body.prompt.length>8000)return Response.json({error:'Prompt must be 1–8000 characters'},{status:400,headers});
+try{const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),25000);let upstream;try{upstream=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',{method:'POST',headers:{'content-type':'application/json','x-goog-api-key':env.GEMINI_API_KEY},body:JSON.stringify({contents:[{parts:[{text:body.prompt}]}]}),signal:controller.signal})}finally{clearTimeout(timeout)}
+if(!upstream.ok)return Response.json({error:'Gemini request failed (HTTP '+upstream.status+'); check quotas and billing.'},{status:502,headers});
+const data=await upstream.json();return Response.json({text:data.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||'No text returned'},{headers});
+}catch{return Response.json({error:'Gemini request timed out or network failed'},{status:502,headers})}
+}};
