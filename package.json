@@ -1,0 +1,1 @@
+{"name":"gemini-lab","private":true,"type":"module","scripts":{"check":"node --check src/index.js"}}
